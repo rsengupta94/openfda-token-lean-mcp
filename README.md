@@ -83,68 +83,91 @@ uv run pytest                                                 # tests
 
 ## Using it
 
-Once connected, drive it in natural language — the host's model picks the tool. Agents and
-MCP clients can also call the tools and read the resources directly.
+How you invoke a primitive depends on the client:
+
+- **Claude Desktop / Claude Code (a model is in the loop):** ask in plain language — _"top adverse reactions for ibuprofen"_, _"boxed warning for warfarin"_ — and the model fills in the arguments below for you.
+- **MCP Inspector or any direct MCP client (no model):** you supply the arguments yourself in a form. There is no natural-language step — that's expected.
+
+The server exposes **4 tools, 2 resource templates, and 1 prompt.**
 
 ### Tools
 
-| Ask | Tool call | Returns |
+Each tool returns a lean JSON payload. `query`/`term` is always required.
+
+#### `search_adverse_events(query, count_by=None, fields=None, limit=10)`
+Adverse-event (FAERS) reports for a drug.
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `query` | string | _required_ | Drug **generic** name. Matches the normalized generic name, so use `ibuprofen`, not `Advil`. |
+| `count_by` | string | `null` | `"reaction"` → ranked reaction counts. Omit for projected records. |
+| `fields` | string[] | `null` | Record mode only — replace the default projection with these top-level fields (see the fields catalog resource). |
+| `limit` | integer | `10` | 1–1000. Number of count buckets, or number of records. |
+
+Returns — **count mode:** `{ drug, total_reports, top: [{value, count}] }`; **record mode:** `{ results: [{report_id, received, serious, drugs[], reactions[]}] }`.
+
+```jsonc
+// search_adverse_events(query="ibuprofen", count_by="reaction", limit=5)
+{ "drug": "ibuprofen", "total_reports": 279646,
+  "top": [ {"value": "DRUG INEFFECTIVE", "count": 27091}, {"value": "PAIN", "count": 19276} ] }
+```
+
+#### `search_drug_labels(query, sections=["summary"], limit=5)`
+Curated sections of a drug's SPL label.
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `query` | string | _required_ | Drug **brand or generic** name. |
+| `sections` | string[] | `["summary"]` | SPL section names — e.g. `boxed_warning`, `indications_and_usage`, `warnings`, `adverse_reactions`, `contraindications`, `dosage_and_administration`, `drug_interactions` — or `"summary"` for a compact curated set. Sections absent on a label are simply omitted. |
+| `limit` | integer | `5` | 1–1000. Max matching labels to return. |
+
+Returns: `{ results: [{drug, set_id, <each requested section>}] }`. **Always includes `set_id`** — the handle for the full-label resource below.
+
+#### `search_recalls(query, count_by=None, fields=None, limit=10)`
+Drug enforcement (recall) reports for a drug.
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `query` | string | _required_ | Drug **brand or generic** name (matches the recall's drug, not the firm). |
+| `count_by` | string | `null` | `"classification"`, `"status"`, or `"reason"` → ranked counts. Omit for projected records. |
+| `fields` | string[] | `null` | Record mode only — replace the default projection. |
+| `limit` | integer | `10` | 1–1000. Buckets or records. |
+
+Returns — **count mode:** `{ drug, top: [{value, count}] }`; **record mode:** `{ results: [{recall_number, status, classification, reason, product, firm, date}] }`.
+
+#### `resolve_drug(term)`
+Map a brand or generic name to identifiers.
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `term` | string | _required_ | A brand or generic name, e.g. `Advil`. |
+
+Returns: `{ query, generic_name, brand_names[], product_ndc[], rxcui[] }` — or `{ query, candidates[] }` when the name is ambiguous or absent from current openFDA labels.
+
+### Resource templates
+
+Read by URI via MCP `resources/read`. An MCP client or coding agent (the Inspector, Claude Code, an SDK) reads them by URI directly; in a chat host, ask for the document and the host fetches it.
+
+| URI template | Parameter | Returns |
 |---|---|---|
-| "Top adverse reactions for ibuprofen" | `search_adverse_events(query, count_by="reaction")` | ranked reaction counts |
-| "Adverse-event reports for ibuprofen" | `search_adverse_events(query, limit=10)` | projected FAERS records |
-| "Boxed warning for warfarin" | `search_drug_labels(query, sections=["boxed_warning"])` | that section only, plus `set_id` |
-| "Summarize the atorvastatin label" | `search_drug_labels(query, sections=["summary"])` | curated section subset, plus `set_id` |
-| "Recalls for metformin" | `search_recalls(query, limit=10)` | projected recall records |
-| "Recall classifications for metformin" | `search_recalls(query, count_by="classification")` | ranked counts |
-| "Generic name for Advil" | `resolve_drug(term)` | generic name, brands, NDC, RxCUI (or candidates if ambiguous) |
+| `openfda://label/{set_id}` | `set_id` — copied from a `search_drug_labels` result | The full SPL label document (the bulky doc, on demand). |
+| `openfda://fields/{endpoint}` | `endpoint` = `event` \| `label` \| `enforcement` | The projectable-field catalog for that endpoint — each field's `name`/`type` and any `count_by` key. Feed field names to a tool's `fields` parameter. |
 
-- **`sections`** — any SPL section (`boxed_warning`, `indications_and_usage`, `warnings`, `adverse_reactions`, …) or `"summary"` (a compact curated set). Default: `summary`.
-- **`count_by`** — `reaction` for events; `classification` / `status` / `reason` for recalls. Omit it to get projected records instead of counts.
-- **`fields`** — overrides the default record projection (see *Discovering fields* below).
-
-A lean response — `search_adverse_events(query="ibuprofen", count_by="reaction")`:
-
-```json
-{
-  "drug": "ibuprofen",
-  "total_reports": 279646,
-  "top": [
-    { "value": "DRUG INEFFECTIVE", "count": 27091 },
-    { "value": "PAIN", "count": 19276 }
-  ]
-}
-```
-
-### Fetching a full document
-
-By design, **no tool inlines a full label** — that is the token saving. `search_drug_labels`
-always returns a `set_id`, and the complete Structured Product Label is one resource read
-away:
+**Fetching a full label — the two-step handoff.** You never supply `set_id` yourself; a tool hands it to you:
 
 ```
-1.  search_drug_labels(query="warfarin", sections=["boxed_warning"])
-       → { "drug": "WARFARIN SODIUM", "set_id": "0cbce382-…", "boxed_warning": [ … ] }   (~1 KB)
+1. search_drug_labels(query="warfarin", sections=["boxed_warning"])
+     → { "drug": "WARFARIN SODIUM", "set_id": "0cbce382-…", "boxed_warning": [ … ] }   (~1 KB)
 
-2.  read resource:  openfda://label/0cbce382-…
-       → the full SPL label document                                                     (~130 KB)
+2. read  openfda://label/0cbce382-…
+     → the full SPL label document                                                      (~130 KB)
 ```
 
-This uses MCP's standard `resources/read`. A coding agent or MCP client — Claude Code, the
-MCP Inspector, or any SDK client — reads the URI directly; in a chat host, ask for the full
-label and the host fetches the resource. The lean answer stays cheap; the full document is
-there the moment you actually need it.
+### Prompt
 
-### Discovering fields
-
-Read `openfda://fields/{endpoint}` (`endpoint` = `event` | `label` | `enforcement`) for the
-catalog of projectable fields, then pass field names to a tool's `fields` parameter to
-tailor the projected records.
-
-### Guided review
-
-The `drug_safety_review(drug_name)` prompt expands into a workflow that assembles the boxed
-warning, the most-reported serious adverse events, and active recalls — surfaced in hosts as
-a reusable prompt / slash-command.
+| Prompt | Parameter | What it does |
+|---|---|---|
+| `drug_safety_review` | `drug_name` (string) | Returns a guided workflow that assembles the boxed warning, most-reported serious adverse events, and active recalls for the drug. Appears in hosts as a reusable prompt / slash-command. |
 
 ## Notes
 
