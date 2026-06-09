@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# uv / venv
+.venv/
+
+# env / secrets
+.env
+
+# OS
+.DS_Store
+
+# internal build docs — not part of the public package
+spec.md
+CLAUDE.md
+.claude/
