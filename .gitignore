@@ -18,3 +18,8 @@ __pycache__/
 spec.md
 CLAUDE.md
 .claude/
+
+# Phase 2 measurement harness + report — local only, not shipped (per spec)
+harness/
+*.report.md
+*.report.json
