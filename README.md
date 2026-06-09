@@ -95,7 +95,7 @@ The server exposes **4 tools, 2 resource templates, and 1 prompt.**
 Each tool returns a lean JSON payload. `query`/`term` is always required.
 
 #### `search_adverse_events(query, count_by=None, fields=None, limit=10)`
-Adverse-event (FAERS) reports for a drug.
+Searches FAERS — the FDA Adverse Event Reporting System — for adverse-event reports that mention a drug. **Purpose:** understand a drug's reported real-world side effects. Set `count_by="reaction"` for the reactions most frequently reported with the drug (ranked by report count), or omit it to return individual case reports.
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
@@ -113,7 +113,7 @@ Returns — **count mode:** `{ drug, total_reports, top: [{value, count}] }`; **
 ```
 
 #### `search_drug_labels(query, sections=["summary"], limit=5)`
-Curated sections of a drug's SPL label.
+Fetches a drug's official FDA labeling (the SPL — the approved prescribing information / package insert) and returns only the sections you request. **Purpose:** read authoritative label text — the boxed warning, indications, dosing, contraindications, and so on — without loading the entire multi-section document.
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
@@ -124,7 +124,7 @@ Curated sections of a drug's SPL label.
 Returns: `{ results: [{drug, set_id, <each requested section>}] }`. **Always includes `set_id`** — the handle for the full-label resource below.
 
 #### `search_recalls(query, count_by=None, fields=None, limit=10)`
-Drug enforcement (recall) reports for a drug.
+Searches the FDA's drug enforcement (recall) records for a drug. **Purpose:** find whether and why a drug has been recalled. It returns the recall records (reason, severity classification, recalling firm, dates), or — with `count_by` — a ranked summary such as recalls by classification.
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
@@ -136,7 +136,7 @@ Drug enforcement (recall) reports for a drug.
 Returns — **count mode:** `{ drug, top: [{value, count}] }`; **record mode:** `{ results: [{recall_number, status, classification, reason, product, firm, date}] }`.
 
 #### `resolve_drug(term)`
-Map a brand or generic name to identifiers.
+Looks up a drug by any brand or generic name and returns its canonical identifiers — generic name, brand names, NDC product codes, and RxCUI codes. **Purpose:** name normalization. Run it first when you only have a brand name (e.g. "Advil"), because the other tools match on the generic name.
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
